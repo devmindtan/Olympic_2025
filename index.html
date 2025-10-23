@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Query Sender</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    input,
+    textarea,
+    button {
+      display: block;
+      width: 100%;
+      margin-bottom: 15px;
+      padding: 10px;
+      font-size: 16px;
+    }
+
+    #response {
+      white-space: pre-wrap;
+      background-color: #f4f4f4;
+      padding: 15px;
+      border: 1px solid #ddd;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Send Query</h1>
+  <label for="query">Enter your query:</label>
+  <textarea id="query" rows="4" placeholder="Type your query here..."></textarea>
+
+  <label for="endpoint">API Endpoint:</label>
+  <input type="text" id="endpoint" placeholder="https://example.com/api">
+
+  <button id="sendBtn">Send Request</button>
+
+  <h2>Response:</h2>
+  <div id="response">Waiting for request...</div>
+
+  <script>
+    document.getElementById('sendBtn').addEventListener('click', async () => {
+      const query = document.getElementById('query').value;
+      const responseDiv = document.getElementById('response');
+
+      if (!query) {
+        alert('Please enter a query!');
+        return;
+      }
+
+      responseDiv.textContent = 'Searching...';
+
+      try {
+        // 1️⃣ Step 1: Search entities
+        const searchRes = await fetch(
+          `https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&search=${encodeURIComponent(query)}&origin=*`
+        );
+        const searchData = await searchRes.json();
+        const ids = searchData.search.map(item => item.id).slice(0, 5); // top 5
+
+        if (ids.length === 0) {
+          responseDiv.textContent = 'No entities found.';
+          return;
+        }
+
+        // 2️⃣ Step 2: Get entities data (claims)
+        const entitiesRes = await fetch(
+          `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join('|')}&format=json&languages=en&origin=*`
+        );
+        const entitiesData = await entitiesRes.json();
+        const results = [];
+
+        for (const id of ids) {
+          const entity = entitiesData.entities[id];
+          if (!entity) continue;
+
+          // 3️⃣ Step 3: Lấy P31 và P136
+          const claims = entity.claims || {};
+          const p31Ids = claims.P31 ? claims.P31.map(c => c.mainsnak.datavalue.value.id) : [];
+          const p136Ids = claims.P136 ? claims.P136.map(c => c.mainsnak.datavalue.value.id) : [];
+
+          // 4️⃣ Step 4: Resolve labels của P31 và P136
+          const allIdsToResolve = [...p31Ids, ...p136Ids];
+          const resolvedLabels = {};
+          if (allIdsToResolve.length > 0) {
+            const labelRes = await fetch(
+              `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${allIdsToResolve.join('|')}&format=json&languages=en|vi&origin=*`
+            );
+            const labelData = await labelRes.json();
+            for (const rid of allIdsToResolve) {
+              const lblEntity = labelData.entities[rid];
+              if (lblEntity) {
+                resolvedLabels[rid] = {
+                  en: lblEntity.labels?.en?.value || '',
+                  vi: lblEntity.labels?.vi?.value || ''
+                };
+              }
+            }
+          }
+
+          // 5️⃣ Step 5: Push kết quả
+          results.push({
+            id,
+            label: entity.labels?.en?.value || '',
+            P31: p31Ids.map(i => ({
+              id: i,
+              label: resolvedLabels[i] || {}
+            })),
+            P136: p136Ids.map(i => ({
+              id: i,
+              label: resolvedLabels[i] || {}
+            }))
+          });
+        }
+
+        responseDiv.textContent = JSON.stringify(results, null, 2);
+      } catch (err) {
+        responseDiv.textContent = 'Error: ' + err;
+      }
+    });
+  </script>
+
+</body>
+
+</html>
